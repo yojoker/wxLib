@@ -1,6 +1,7 @@
 <?php
 require './api.php';
 
+
 class wechat extends Api
 {
     public function valid() 
@@ -14,77 +15,125 @@ class wechat extends Api
             exit;
         //}
     }
+
     public function responseMsg()
     {
-        //与$_POST功能类似，主要用于接受HTTP请求中的POST数据
-        $postStr = $GLOBALS["HTTP_RAW_POST_DATA"];
+		//同$_POST用来接收用户发送给腾讯服务器，腾讯服务器推送过来的消息
+		$postStr = $GLOBALS["HTTP_RAW_POST_DATA"];
+        //将腾讯服务器推送的XML数据转化为对象
+      	$postObj = simplexml_load_string($postStr, 'SimpleXMLElement', LIBXML_NOCDATA);
+        //根据接口的XML数据-> 逻辑判断/业务需求判断 -> 响应XML数据给腾讯服务器（文本、图片、视频等）
+        $toUserName  = $postObj->ToUserName;     //开发者微信号（原接受者）
+        $fromUserName = $postObj->FromUserName;  //发送方帐号（原发送者）
+        switch ($postObj->MsgType) {
+                case 'voice':
+                #$this->sendText($fromUserName, $toUserName, '语音内容为：'.$postObj->Recognition);
+           
+                $this->sendText($fromUserName, $toUserName,$this->liaotian($postObj->Recognition));
+                break;
 
-        //判断数据是否为空
-        if (!empty($postStr)) 
-        {
-            //安全处理：防止XXE漏洞
-            libxml_disable_entity_loader(true);
-            //将字符串划分为对象
-            $postObj = simplexml_load_string($postStr, 'SimpleXMLElement', LIBXML_NOCDATA);
-            $fromUsername = $postObj->FromUserName; //发送者唯一标识
-            $toUsername = $postObj->ToUserName;     //接受者唯一标识
-            $keyword = trim($postObj->Content);     //发送的内容
-            $time = time();
-            switch($postObj->MsgType ) {
+                case 'event':
+                    if ($postObj->Event == 'subscribe') {
+                        $this->sendText($fromUserName, $toUserName, '新用户，来自门店'.$postObj->EventKey);
+                    }else if ($postObj->Event == 'SCAN') {
+                        $this->sendText($fromUserName, $toUserName, '老用户，来自门店'.$postObj->EventKey);
+                    }
+                    break;
                 case 'location':
-                    //传递经度、纬度获取城市天气
-                    $weatherData = $this->getWeather($postObj->Location_X, $postObj->Location_Y);
-                    //$weatherData = $this->getWeather('39.903226', '116.397716');
-                    //声明图文消息数据
-                   $articleData[] = array('title' => '天气预报', 'desc'=>'', 'img'=>'', 'url'=>'');
-                    //遍历城市天气数据，组装图文消息数据
-                   foreach ($weatherData as $weather) {
 
-                        $articleData[] =  array(
-                        'title' => $weather['date'] . $weather['weather'] . $weather['wind'] . $weather['temperature'], 
-                        'desc' => '', 
-                        'img' => $weather['dayPictureUrl'], 
-                        'url' => ''
+                    // 步骤1：定义请求接口
+                    $apiData = array(
+                    'key'=>'b94b446f4ecad8b4f0e6cf758bacf915',
+                    'location'=> $postObj->Location_Y . ',' . $postObj->Location_X,
+                    'keywords'=>'如家',
+                    'types'=>'',
+                    'radius'=>'10000',
+                    'offset'=>'20',
+                    'page'=>'1',
+                    'extensions'=>'all'
+                    );
+                    $api = "https://restapi.amap.com/v3/place/around?".http_build_query($apiData);
+                    // 步骤2：发送请求
+                    $data = json_decode(file_get_contents($api), true);
+
+                    foreach ($data['pois'] as $pois) {
+                        $temp[] = $pois['name'];
+                        $temp[] = $pois['distance'];
+                        $temp[] = $pois['address'];
+                    }
+
+                    #$msg = "您发送的是地理位置消息，经度：{$postObj->Location_Y}，纬度：{$postObj->Location_X}";
+                    $this->sendText($fromUserName, $toUserName, implode(',', $temp));
+                case 'text':
+                    $content = $postObj->Content;
+                    if (strpos('_'.$content, '翻译')) {
+                        $this->sendText($fromUserName, $toUserName, $this->fanyi($content));
+                    }
+                if ($content == '新闻') {
+                    $pdo = new PDO('mysql:dbname=syg;charset=utf8', 'root', '');
+                    $pdostatement = $pdo->query("select * from news");
+                    $data = $pdostatement->fetchAll(PDO::FETCH_ASSOC);
+
+                    foreach ($data as $news) {
+                        $sendData[]  = array(
+                            'title' => $news['title'],
+                            'desc' => $news['description'],
+                            'img' => $news['picurl'],
+                            'url' => $news['url']
                         );
                     }
-                    //响应图文消息
-                    $this->sendNews($fromUsername, $toUsername, $articleData);
+                    $this->sendNews($fromUserName, $toUserName, $sendData);
+                }
 
-
-                    //$content = '您发送的是地理位置消息，经度：'.$postObj->Location_Y.'，纬度：'.$postObj->Location_X;
-                    //$this->sendText($fromUsername, $toUsername, $content);
+                    #图灵机器人聊天
+                    $this->sendText($fromUserName, $toUserName,$this->liaotian($content));
                     break;
                 default:
-                    $this->sendText($fromUsername, $toUsername, '你有瑕疵，请尽快联系传智PHP学院帮你修复');
+                    # code...
+                    break;
             }
 
+    }
 
 
-            // $articleData = array(
-            //     array('title' => '美丽的家乡', 'desc' => '描述', 'img' => 'http://118.31.9.103/img/b1.jpg', 'url' => ''),
-            //     array('title' => '标题1', 'desc' => '描述1', 'img' => 'http://118.31.9.103/img/one.png', 'url' => ''),
-            //     array('title' => '标题2', 'desc' => '描述2', 'img' => 'http://118.31.9.103/img/two.png', 'url' => ''),
-            //     array('title' => '标题3', 'desc' => '描述3', 'img' => 'http://118.31.9.103/img/three.png', 'url' => ''),
-            //     array('title' => '标题4', 'desc' => '描述4', 'img' => 'http://118.31.9.103/img/four.png', 'url' => '')
-            // );
+    /*
+     * 翻译功能
+     * @param  string $content 内容
+     * @return string
+     */
+    public function fanyi($content) 
+    {
+        //$content = "翻译dog";
+        //判断内容里面是否有翻译二字
+        // 步骤1：定义请求接口
+        $api = "http://fanyi.youdao.com/openapi.do?keyfrom=xujiangtao&key=1490852988&type=data&doctype=json&version=1.1&q=".str_replace('翻译', '', $content);
+        // 步骤2：获取数据
+        $data = json_decode(file_get_contents($api), true);
+        return $data['translation'][0];
+    }
+    /*
+     * 智能聊天
+     * @param  string $content 内容
+     * @param  user   $userid  用户ID
+     * @return string
+     */
+    public function liaotian($content, $userid = '') 
+    {
+        $api = "http://www.tuling123.com/openapi/api";
+        $apiData = json_encode(array(
+            "key"=>"105042050cc245fd9ec31f21f5da6952",
+            "info"=> $content,
+            "userid"=>$userid
+        ));
+        $data = $this->httpRequest($api, $apiData, true);
+        return $data['text'];
+    }
 
-            //响应图文消息
-            // $this->sendNews($fromUsername, $toUsername, $articleData);
 
-            //响应文字消息
-            //$this->sendText($fromUsername, $toUsername, "传智播客上海PHP学院1");
 
-            //响应音乐消息
-            //$musicUrl = 'http://118.31.9.103/红日.mp3';
-            //$mediaid = 'JVQXJiG-e6RC0bi9Ld54vVo9QZFj9UstHlhllvEyQn_5S5ZeXkvNnuBzXL4faVaF';
-            //$this->sendMusic($fromUsername, $toUsername, $keyword, '音乐描述', $musicUrl, $musicUrl, $mediaid);
 
-        }else {
-            echo "";
-            exit;
-        }
-    }	
-}	
+
+}
 
 
 //创建微信对象
@@ -93,3 +142,4 @@ $wechatObj = new wechat;
 //$wechatObj->valid();
 //响应请求消息
 $wechatObj->responseMsg();
+
